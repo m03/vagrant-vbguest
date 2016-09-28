@@ -53,6 +53,8 @@ en:
           Sorry, don't know how to %{method} Virtualbox Guest Additions on this platform. Stopping installation.
         generic_linux_installer: |-
           The guest's platform ("%{distro}") is currently not supported, will try generic Linux method...
+        generic_windows_installer: |-
+          The guest's platform ("%{distro}") is currently not supported, will try generic Windows method...
         do_not_inherit_match_method: |-
           Installer classes must provide their own `match?` method.
 
