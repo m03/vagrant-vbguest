@@ -23,7 +23,8 @@ module VagrantVbguest
       # therefore should do a more specific check.
       def self.match?(vm)
         raise Error, :_key => :do_not_inherit_match_method if self != Windows
-        communicate_to(vm).test("test -d $Env:SystemRoot")
+        guest = VagrantPlugins::GuestWindows::Guest.new()
+        guest.detect?(vm)
       end
 
       # Reads the `/etc/os-release` for the given `Vagrant::VM` if present, and
@@ -32,14 +33,24 @@ module VagrantVbguest
       # @return [Hash|nil] The os-release configuration as Hash, or `nil if file is not present or not parsable.
       def self.os_release(vm)
         @@os_release_info ||= {}
-        if !@@os_release_info.has_key?(vm_id(vm)) && communicate_to(vm).test("test -f /etc/os-release")
-          osr_raw = communicate_to(vm).download("/etc/os-release")
-          osr_parsed = begin
-            VagrantVbguest::Helpers::OsRelease::Parser.(osr_raw)
-          rescue VagrantVbguest::Helpers::OsRelease::FormatError => e
-            vm.env.ui.warn(e.message)
-            nil
+        if !@@os_release_info.has_key?(vm_id(vm)) && self.match?(vm)
+          osr_parsed = { 'NAME' => 'Windows', 'ID' => 'windows', 'ID_LIKE' => 'windows',
+                         'HOME_URL' => 'https://www.microsoft.com/en-us/windows/',
+                         'SUPPORT_URL' => 'https://support.microsoft.com/en-us/contactus/',
+                         'BUG_REPORT_URL' => 'https://connect.microsoft.com/'
+          }
+          cmds = { 'VERSION_ID' => 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty Version',
+                   'PRETTY_NAME' => 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty Caption'
+          }
+          cmds.each do |key, cmd|
+              begin
+                osr_parsed[key] = communicate.sudo(cmd, opts, &block)
+              rescue => e
+                vm.env.ui.warn(e.message)
+                osr_parsed[key] = String.new
+              end
           end
+          osr_parsed['VERSION'] = osr_parsed['VERSION_ID']
           @@os_release_info[vm_id(vm)] = osr_parsed
         end
         @@os_release_info[vm_id(vm)]
@@ -59,10 +70,10 @@ module VagrantVbguest
 
       # Mount point for the iso file.
       # Configurable via `config.vbguest.iso_mount_point`.
-      # defaults to `D:\\` for all Windows based systems.
+      # defaults to `E:\\` for all Windows based systems.
       def mount_point
         # populated by mount_iso
-        options[:iso_mount_point] || 'D:\\'
+        options[:iso_mount_point] || 'E:\\'
       end
 
       # A generic way of installing GuestAdditions assuming all
@@ -88,7 +99,7 @@ module VagrantVbguest
         opts = {
           :sudo => true
         }.merge(opts || {})
-        communicate.test('lsmod | grep vboxsf', opts, &block)
+        communicate.test('"$(Get-Service -Name VBoxService | Select-Object -ExpandProperty Status)" -match "\\bRun"', opts, &block)
       end
 
       # This overrides {VagrantVbguest::Installers::Base#guest_version}
@@ -119,9 +130,9 @@ module VagrantVbguest
       # @param opts [Hash] Optional options Hash wich meight get passed to {Vagrant::Communication::SSH#execute} and firends
       # @yield [type, data] Takes a Block like {Vagrant::Communication::Base#execute} for realtime output of the command being executed
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
-      # @yieldparam [String] data Data for the given output.
+      # @yieldparam [String] data Data for the given outputervice
       def rebuild(opts=nil, &block)
-        communicate.sudo("#{vboxadd_tool} setup", opts, &block)
+        install(opts, &block))
       end
 
       # @param opts [Hash] Optional options Hash wich meight get passed to {Vagrant::Communication::SSH#execute} and firends
@@ -130,102 +141,34 @@ module VagrantVbguest
       # @yieldparam [String] data Data for the given output.
       def start(opts=nil, &block)
         opts = {:error_check => false}.merge(opts || {})
-        if systemd_tool
-          communicate.sudo("#{systemd_tool[:path]} vboxadd #{systemd_tool[:up]}", opts, &block)
-        else
-          communicate.sudo("#{vboxadd_tool} start", opts, &block)
-        end
-      end
-
-      # Check for the presence of 'systemd' chkconfg or service command.
-      #
-      #    systemd_tool # => {:path=>"/usr/sbin/service", :up=>"start"}
-      #
-      # @return [Hash|nil] Hash with an absolute +path+ to the tool and the
-      #                    command string for starting.
-      #                    +nil* if neither was found.
-      def systemd_tool
-        return nil if @systemd_tool == false
-
-        result = nil
-        communicate.sudo('(which chkconfg || which service) 2>/dev/null', {:error_check => false}) do |type, data|
-          path = data.to_s.strip
-          case path
-          when /\bservice\b/
-            result = { path: path, up: "start", down: "stop" }
-          when /\bchkconfg\b/
-            result = { path: path, up: "on", down: "off" }
-          end
-        end
-
-        if result.nil?
-          @systemd_tool = false
-          nil
-        else
-          @systemd_tool = result
-        end
-      end
-
-      # Checks for the correct location of the 'vboxadd' tool.
-      # It checks for a given list of possible locations. This list got
-      # extracted from the 'VBoxLinuxAdditions.run' script.
-      #
-      # @return [String|nil] Absolute path to the +vboxadd+ tool,
-      #                      or +nil+ if none found.
-      def vboxadd_tool
-        candidates = [
-          "$Env:SystemRoot\\System32\\VBoxService.exe",
-          "$Env:ProgramFiles\\Oracle\\VirtualBox Guest Additions",
-          "${Env:ProgramFiles(x86)}\\Oracle\\VirtualBox Guest Additions"
-          "/usr/lib/i386-linux-gnu/VBoxGuestAdditions/vboxadd",
-          "/usr/lib/x86_64-linux-gnu/VBoxGuestAdditions/vboxadd",
-          "/usr/lib64/VBoxGuestAdditions/vboxadd",
-          "/usr/lib/VBoxGuestAdditions/vboxadd",
-          "/lib64/VBoxGuestAdditions/vboxadd",
-          "/lib/VBoxGuestAdditions/vboxadd",
-          "/etc/init.d/vboxadd",
-        ]
-        cmd = <<-SHELL
-        for c in #{candidates.join(" ")}; do
-          if test -x "$c"; then
-            echo $c
-            break
-          fi
-        done
-        SHELL
-
-        path = nil
-        communicate.sudo(cmd, {:error_check => false}) do |type, data|
-          path = data.strip unless data.empty?
-        end
-        path
+        communicate.sudo('Start-Service -Name VBoxService', opts, &block)
       end
 
       # A generic helper method to execute the installer.
       # This also yields a installation warning to the user, and an error
       # warning in the event that the installer returns a non-zero exit status.
       #
-      # @param opts [Hash] Optional options Hash wich meight get passed to {Vagrant::Communication::SSH#execute} and firends
+      # @param opts [Hash] Optional options Hash which might get passed to {Vagrant::Communication::SSH#execute} and friends
       # @yield [type, data] Takes a Block like {Vagrant::Communication::Base#execute} for realtime output of the command being executed
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
       def execute_installer(opts=nil, &block)
         yield_installation_waring(installer)
         opts = {:error_check => false}.merge(opts || {})
-        exit_status = communicate.sudo("#{installer} #{installer_arguments}", opts, &block)
+        exit_status = communicate.sudo("#{installer} #{windows_installer_arguments}", opts, &block)
         yield_installation_error_warning(installer) unless exit_status == 0
         exit_status
       end
 
-      # The absolute path to the GuestAdditions installer script.
+      # The absolute path to the GuestAdditions installer.
       # The iso file has to be mounted on +mount_point+.
       def installer
         @installer ||= File.join(mount_point, 'VBoxWindowsAdditions.exe')
       end
 
-      # The arguments string, which gets passed to the installer script
-      def installer_arguments
-        @installer_arguments ||= Array(options[:installer_arguments]).join " "
+      # The arguments string, which gets passed to the installer executable
+      def windows_installer_arguments
+        @windows_installer_arguments ||= Array(options[:windows_installer_arguments]).join " "
       end
 
       # A generic helper method for mounting the GuestAdditions iso file
@@ -239,7 +182,7 @@ module VagrantVbguest
       def mount_iso(opts=nil, &block)
         cmd = <<-SHELL
         $CimInstance = Mount-DiskImage -ImagePath '#{tmp_path}' -PassThru
-        $DriveLetter = $CimInstance | Get-Volume | Select-Object -Expand DriveLetter
+        $DriveLetter = $CimInstance | Get-Volume | Select-Object -ExpandProperty DriveLetter
         Write-Output "$($DriveLetter):\\"
         SHELL
         communicate.sudo(cmd, opts, &block) do |type, data|

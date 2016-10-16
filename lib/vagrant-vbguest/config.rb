@@ -4,7 +4,7 @@ module VagrantVbguest
 
     module Attributes
       attr_accessor :auto_update, :auto_reboot, :no_install, :no_remote,
-                    :installer, :installer_arguments,
+                    :installer, :installer_arguments, :windows_installer_arguments,
                     :iso_path, :iso_upload_path, :iso_mount_point
     end
 
@@ -16,6 +16,7 @@ module VagrantVbguest
       def no_install;  @no_install.nil?  ? false : @no_install  end
       def no_remote;   @no_remote.nil?   ? false : @no_remote   end
       def installer_arguments; @installer_arguments.nil? ? '--nox11' : @installer_arguments end
+      def windows_installer_arguments; @windows_installer_arguments.nil? ? '/S' : @windows_installer_arguments end
 
       def iso_path
         return nil if !@iso_path || @iso_path == :auto
@@ -29,7 +30,7 @@ module VagrantVbguest
     def auto_reboot; @auto_reboot.nil? ? self.class.auto_reboot : @auto_reboot end
     def no_install;  @no_install.nil?  ? self.class.no_install  : @no_install  end
     def no_remote;   @no_remote.nil?   ? self.class.no_remote   : @no_remote   end
-    def installer_arguments; @installer_arguments.nil? ? self.class.installer_arguments : @installer_arguments end
+    def windows_installer_arguments; @windows_installer_arguments.nil? ? self.class.windows_installer_arguments : @windows_installer_arguments end
 
     def iso_path
       return self.class.iso_path if !@iso_path || @iso_path == :auto
@@ -41,6 +42,7 @@ module VagrantVbguest
       {
         :installer => installer,
         :installer_arguments => installer_arguments,
+        :windows_installer_arguments => windows_installer_arguments,
         :iso_path => iso_path,
         :iso_upload_path => iso_upload_path,
         :iso_mount_point => iso_mount_point,
