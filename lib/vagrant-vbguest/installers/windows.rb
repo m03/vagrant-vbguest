@@ -23,8 +23,7 @@ module VagrantVbguest
       # therefore should do a more specific check.
       def self.match?(vm)
         raise Error, :_key => :do_not_inherit_match_method if self != Windows
-        guest = VagrantPlugins::GuestWindows::Guest.new()
-        guest.detect?(vm)
+        VagrantPlugins::GuestWindows::Guest.new().detect?(vm)
       end
 
       # Reads the `/etc/os-release` for the given `Vagrant::VM` if present, and
@@ -132,7 +131,7 @@ module VagrantVbguest
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given outputervice
       def rebuild(opts=nil, &block)
-        install(opts, &block))
+        install(opts, &block)
       end
 
       # @param opts [Hash] Optional options Hash wich meight get passed to {Vagrant::Communication::SSH#execute} and firends
@@ -185,7 +184,8 @@ module VagrantVbguest
         $DriveLetter = $CimInstance | Get-Volume | Select-Object -ExpandProperty DriveLetter
         Write-Output "$($DriveLetter):\\"
         SHELL
-        communicate.sudo(cmd, opts, &block) do |type, data|
+        communicate.sudo(cmd, opts) do |type, data|
+          block
           mount_point = data.strip unless data.empty?
         end
       end
