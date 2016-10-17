@@ -64,7 +64,8 @@ module VagrantVbguest
       # Defaults the temp path to `$($Env:Temp)\\VBoxGuestAdditions.iso`
       # for all Windows based systems.
       def tmp_path
-        options[:iso_upload_path] || '$($Env:Temp)\\VBoxGuestAdditions.iso'
+        #options[:iso_upload_path] || '$($Env:Temp)\\VBoxGuestAdditions.iso'
+        options[:iso_upload_path] || 'C:\\Windows\\Temp\\VBoxGuestAdditions.iso'
       end
 
       # Mount point for the iso file.
@@ -83,10 +84,15 @@ module VagrantVbguest
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
       def install(opts=nil, &block)
-        env.ui.warn I18n.t("vagrant_vbguest.errors.installer.generic_windows_installer", distro: self.class.distro(vm)) if self.class == Windows
+        puts "Setting WinRm limits"
+        set_winrm_limits(opts, &block)
+        puts "Uploading ISO"
         upload(iso_file)
+        puts "Mounting ISO"
         mount_iso(opts, &block)
+        puts "Executing installer"
         execute_installer(opts, &block)
+        puts "Unmounting ISO"
         unmount_iso(opts, &block) unless options[:no_cleanup]
       end
 
@@ -95,10 +101,11 @@ module VagrantVbguest
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
       def running?(opts=nil, &block)
+        cmd = 'if ("$(Get-Service -Name VBoxService | Select-Object -ExpandProperty Status)" -match "\\bRun") { exit 0 } exit 1'
         opts = {
           :sudo => true
         }.merge(opts || {})
-        communicate.test('"$(Get-Service -Name VBoxService | Select-Object -ExpandProperty Status)" -match "\\bRun"', opts, &block)
+        communicate.test(cmd, opts, &block)
       end
 
       # This overrides {VagrantVbguest::Installers::Base#guest_version}
@@ -200,6 +207,29 @@ module VagrantVbguest
       # @yieldparam [String] data Data for the given output.
       def unmount_iso(opts=nil, &block)
         communicate.sudo("Dismount-DiskImage -ImagePath '#{tmp_path}'", opts, &block)
+      end
+
+      # Increase default limits so that WinRm can handle file upload.
+      def set_winrm_limits(opts=nil, &block)
+        settings = {
+          'winrm/config' => {
+            'MaxEnvelopeSizekb' => 4096,
+            'MaxTimeoutms' => 1800000,
+          },
+          'winrm/config/service' => {
+            'MaxConcurrentOperationsPerUser' => 15000,
+            'MaxPacketRetrievalTimeSeconds' => 1200,
+          },
+        }
+        cmd = Array.new()
+        settings.each do |path, configs|
+          configs.each do |key, value|
+            cmd << "winrm set #{path} '@{#{key}=\"#{value}\"}'"
+          end
+        end
+#        cmd << 'Restart-Service WinRm'
+
+        communicate.sudo(cmd.join('; '), opts, &block)
       end
     end
   end
