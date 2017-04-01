@@ -4,6 +4,8 @@ en:
     skipped_rebuild: "Rebuilding GuestAdditions skipped."
     installing: "Installing Virtualbox Guest Additions %{installer_version} - guest version is %{guest_version}"
     installing_forced: "Forcing installation of Virtualbox Guest Additions %{installer_version} - guest version is %{guest_version}"
+    mounting_iso: "Mounting ISO"
+    unmounting_iso: "Unmounting ISO"
     rebuild: "Rebuilding Virtualbox Guest Additions %{guest_version} (Your host version is %{host_version})"
     rebuild_forced: "Forcing rebuilding of Virtualbox Guest Additions %{guest_version} (Your host version is %{host_version})"
     install_error: |-
@@ -53,6 +55,8 @@ en:
           Sorry, don't know how to %{method} Virtualbox Guest Additions on this platform. Stopping installation.
         generic_linux_installer: |-
           The guest's platform ("%{distro}") is currently not supported, will try generic Linux method...
+        generic_windows_installer: |-
+          The guest's platform ("%{distro}") is currently not supported, will try generic Windows method...
         do_not_inherit_match_method: |-
           Installer classes must provide their own `match?` method.
 
