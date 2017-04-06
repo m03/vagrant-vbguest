@@ -171,10 +171,16 @@ module VagrantVbguest
       # @yield [type, data] Takes a Block like {Vagrant::Communication::Base#execute} for realtime output of the command being executed
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
+
       def execute_installer(opts=nil, &block)
         yield_installation_warning(installer)
         cmd = <<-SHELL
-        (Start-Process -FilePath "#{installer}" -ArgumentList "#{windows_installer_arguments}" -Wait -PassThru).ExitCode
+        $UninstallerPath = Join-Path -Path $Env:ProgramFiles -ChildPath 'Oracle/VirtualBox Guest Additions/uninst.exe'
+        $CertDir = Join-Path -Path '#{mount_point}' -ChildPath 'cert'
+        if (Test-Path -Path $UninstallerPath) { Start-Process -FilePath $UninstallerPath -ArgumentList '/S' -Wait }
+        $Certificates = @(Get-ChildItem -Path $CertDir -Filter *.cer | Foreach-Object { $_.FullName })
+        $Certificates | ForEach-Object { Start-Process -FilePath "$($CertDir)/VBoxCertUtil.exe" -ArgumentList "add-trusted-publisher $($_) --root $($_)" -Wait }
+        (Start-Process -FilePath '#{installer}' -ArgumentList '#{windows_installer_arguments}' -Wait -PassThru).ExitCode
         SHELL
         opts = {:error_check => false}.merge(opts || {})
         exit_status = communicate.sudo(cmd, opts, &block)
