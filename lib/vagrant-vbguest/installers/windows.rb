@@ -1,5 +1,4 @@
 module VagrantVbguest
-  # TODO: Blockers - certificate installation, uninstall of previous version
   module Installers
     # A basic Installer implementation for vanilla or
     # unknown Windows based systems.
@@ -88,6 +87,7 @@ module VagrantVbguest
         upload(iso_file)
         mount_iso(opts, &block)
         extract_installer(opts, &block)
+        execute_certutil(opts, &block)
         execute_installer(opts, &block)
         unmount_iso(opts, &block) unless options[:no_cleanup]
       end
@@ -163,6 +163,24 @@ module VagrantVbguest
         ########## TODO: Should we redefine the @installer path here? ########
       end
 
+      # Helper to ensure that the certificates are in place
+      # so that the installer doesn't prompt for user input.
+      #
+      # @param opts [Hash] Optional options Hash which might get passed to {Vagrant::Communication::SSH#execute} and friends
+      # @yield [type, data] Takes a Block like {Vagrant::Communication::Base#execute} for realtime output of the command being executed
+      # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
+      # @yieldparam [String] data Data for the given output.
+      def execute_certutil(opts=nil, &block)
+        cmd = <<-SHELL
+        $CertDir = Join-Path -Path '#{mount_point}' -ChildPath 'cert'
+        $UtilPath = Join-Path -Path $CertDir -ChildPath 'VBoxCertUtil.exe'
+        $Certificates = @(Get-ChildItem -Path $CertDir -Filter *.cer | Foreach-Object { $_.FullName })
+        $Certificates | ForEach-Object { Start-Process -FilePath $UtilPath -ArgumentList "add-trusted-publisher $($_) --root $($_)" -Wait }
+        SHELL
+        opts = {:error_check => false}.merge(opts || {})
+        communicate.sudo(cmd, opts, &block)
+      end
+
       # A generic helper method to execute the installer.
       # This also yields a installation warning to the user, and an error
       # warning in the event that the installer returns a non-zero exit status.
@@ -171,21 +189,16 @@ module VagrantVbguest
       # @yield [type, data] Takes a Block like {Vagrant::Communication::Base#execute} for realtime output of the command being executed
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
-
       def execute_installer(opts=nil, &block)
         yield_installation_warning(installer)
         cmd = <<-SHELL
-        $UninstallerPath = Join-Path -Path $Env:ProgramFiles -ChildPath 'Oracle/VirtualBox Guest Additions/uninst.exe'
-        $CertDir = Join-Path -Path '#{mount_point}' -ChildPath 'cert'
-        if (Test-Path -Path $UninstallerPath) { Start-Process -FilePath $UninstallerPath -ArgumentList '/S' -Wait }
-        $Certificates = @(Get-ChildItem -Path $CertDir -Filter *.cer | Foreach-Object { $_.FullName })
-        $Certificates | ForEach-Object { Start-Process -FilePath "$($CertDir)/VBoxCertUtil.exe" -ArgumentList "add-trusted-publisher $($_) --root $($_)" -Wait }
-        (Start-Process -FilePath '#{installer}' -ArgumentList '#{windows_installer_arguments}' -Wait -PassThru).ExitCode
+        $ExitCode = (Start-Process -FilePath '#{installer}' -ArgumentList '#{windows_installer_arguments}' -Wait -PassThru).ExitCode
+        Start-Sleep -Seconds 60
+        Return $ExitCode
         SHELL
         opts = {:error_check => false}.merge(opts || {})
         exit_status = communicate.sudo(cmd, opts, &block)
         yield_installation_error_warning(installer) unless exit_status == 0
-        exit_status
       end
 
       # The absolute path to the GuestAdditions installer.
