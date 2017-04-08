@@ -3,7 +3,6 @@ module VagrantVbguest
     # A basic Installer implementation for vanilla or
     # unknown Windows based systems.
     class Windows < Base
-
       # A helper method to cache the result of {Vagrant::Guest::Base#distro_dispatch}
       # which speeds up Installer detection when having lots of Windows based
       # Installer classes to check. Vagrant does not differentiate between Windows
@@ -26,20 +25,21 @@ module VagrantVbguest
         VagrantPlugins::GuestWindows::Guest.new().detect?(vm)
       end
 
-      # Reads the `/etc/os-release` for the given `Vagrant::VM` if present, and
-      # returns it's config as a parsed Hash. The result is cached on a per-vm basis.
+      # Since we don't have `/etc/os-release` under Windows guests, replicate the structure
+      # so that os_release functions similar to the way it does under Linux.
+      # The result is cached on a per-vm basis.
       #
       # @return [Hash|nil] The os-release configuration as Hash, or `nil if file is not present or not parsable.
       def self.os_release(vm)
         @@os_release_info ||= {}
         if !@@os_release_info.has_key?(vm_id(vm)) && self.match?(vm)
           osr_parsed = { 'NAME' => 'Windows', 'ID' => 'windows', 'ID_LIKE' => 'windows',
+                         'BUG_REPORT_URL' => 'https://connect.microsoft.com/',
                          'HOME_URL' => 'https://www.microsoft.com/en-us/windows/',
                          'SUPPORT_URL' => 'https://support.microsoft.com/en-us/contactus/',
-                         'BUG_REPORT_URL' => 'https://connect.microsoft.com/'
           }
-          cmds = { 'VERSION_ID' => 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty Version',
-                   'PRETTY_NAME' => 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty Caption'
+          cmds = { 'PRETTY_NAME' => 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty Caption',
+                   'VERSION_ID' => 'Get-CimInstance -ClassName Win32_OperatingSystem | Select-Object -ExpandProperty Version'
           }
           cmds.each do |key, cmd|
               begin
@@ -59,12 +59,31 @@ module VagrantVbguest
         self.class.os_release(vm)
       end
 
+      # Determine the temporary directory where the ISO file
+      # will be uploaded to. Defaults to `$($Env:Temp)`.
+      #
+      # @param opts [Hash] Optional options Hash which might get passed to {Vagrant::Communication::WinRM#execute} and friends
+      # @yield [type, data] Takes a Block like {Vagrant::Communication::Base#execute} for realtime output of the command being executed
+      # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
+      # @yieldparam [String] data Data for the given output.
+      def tmp_dir
+        return @tmp_dir if @tmp_dir
+        env_tmp = '$($Env:Temp)'
+        cmd = <<-SHELL
+        Get-Item -Path #{env_tmp} | Select-Object -ExpandProperty FullName
+        SHELL
+        communicate.sudo(cmd, :error_check => false) do |type, data|
+          @tmp_dir = data.strip || env_tmp
+        end
+        return @tmp_dir
+      end
+
       # The temporary path where to upload the iso file to.
       # Configurable via `config.vbguest.iso_upload_path`.
       # Defaults the temp path to `$($Env:Temp)\\VBoxGuestAdditions.iso`
       # for all Windows based systems.
       def tmp_path
-        options[:iso_upload_path] || File.join('$($Env:Temp)', 'VBoxGuestAdditions.iso')
+        options[:iso_upload_path] || "#{tmp_dir}\\VBoxGuestAdditions.iso"
       end
 
       # Mount point for the iso file.
@@ -86,7 +105,6 @@ module VagrantVbguest
         env.ui.warn I18n.t("vagrant_vbguest.errors.installer.generic_windows_installer", distro: self.class.distro(vm)) if self.class == Windows
         upload(iso_file)
         mount_iso(opts, &block)
-        extract_installer(opts, &block)
         execute_certutil(opts, &block)
         execute_installer(opts, &block)
         unmount_iso(opts, &block) unless options[:no_cleanup]
@@ -97,10 +115,11 @@ module VagrantVbguest
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
       def running?(opts=nil, &block)
-        cmd = 'if ("$(Get-Service -Name VBoxService | Select-Object -ExpandProperty Status)" -match "\\bRun") { exit 0 } exit 1'
-        opts = {
-          :sudo => true
-        }.merge(opts || {})
+        cmd = <<-SHELL
+        $VBoxService = Get-Service -Name VBoxService | Select-Object -First 1
+        if ("$($VBoxService.Status)".StartsWith('Run')) { Exit 0 } Exit 1
+        SHELL
+        opts = {:sudo => true}.merge(opts || {})
         communicate.test(cmd, opts, &block)
       end
 
@@ -115,10 +134,10 @@ module VagrantVbguest
       #                  available on the guest, or `nil` if none installed.
       def guest_version(reload = false)
         return @guest_version if @guest_version && !reload
-        driver_version = super.to_s[/^(\d+\.\d+.\d+)/, 1]
+        driver_version = super.to_s[VERSION_PATTERN, 1]
 
         communicate.sudo('VBoxService --version', :error_check => false) do |type, data|
-          service_version = data.to_s[/^(\d+\.\d+.\d+)/, 1]
+          service_version = data.to_s[VERSION_PATTERN, 1]
           if service_version
             if driver_version != service_version
               @env.ui.warn(I18n.t("vagrant_vbguest.guest_version_reports_differ", :driver => driver_version, :service => service_version))
@@ -153,14 +172,13 @@ module VagrantVbguest
       # @yieldparam [String] type Type of the output, `:stdout`, `:stderr`, etc.
       # @yieldparam [String] data Data for the given output.
       def extract_installer(opts=nil, &block)
-        env.ui.info(I18n.t("Extracting installer: #{installer}"))
+        env.ui.info("Extracting installer: #{installer}")
         cmd = <<-SHELL
         $DestinationPath = Join-Path -Path $Env:Temp -ChildPath 'VBoxWindowsAdditions'
         Start-Process -FilePath "#{installer}" -ArgumentList "/extract /S /D=$($DestinationPath)" -Wait
         SHELL
         opts = {:error_check => false}.merge(opts || {})
         communicate.sudo(cmd, opts, &block)
-        ########## TODO: Should we redefine the @installer path here? ########
       end
 
       # Helper to ensure that the certificates are in place
@@ -197,8 +215,10 @@ module VagrantVbguest
         Return $ExitCode
         SHELL
         opts = {:error_check => false}.merge(opts || {})
-        exit_status = communicate.sudo(cmd, opts, &block)
-        yield_installation_error_warning(installer) unless exit_status == 0
+        communicate.sudo(cmd, opts) do |type, data|
+          block
+          yield_installation_error_warning(installer) unless data.strip.to_i == 0
+        end
       end
 
       # The absolute path to the GuestAdditions installer.
@@ -243,7 +263,11 @@ module VagrantVbguest
       # @yieldparam [String] data Data for the given output.
       def unmount_iso(opts=nil, &block)
         env.ui.info(I18n.t("vagrant_vbguest.unmounting_iso"))
-        communicate.sudo("Dismount-DiskImage -ImagePath \"#{tmp_path}\"", opts, &block)
+        begin
+          communicate.sudo("Dismount-DiskImage -ImagePath \"#{tmp_path}\"", opts, &block)
+        rescue => e
+          env.ui.warn(e.message)
+        end
       end
 
       # Determinates the version of the GuestAdditions installer in use
@@ -252,13 +276,11 @@ module VagrantVbguest
       def installer_version(path_to_installer)
         version = nil
         cmd = <<-SHELL
-        $DestinationPath = Join-Path -Path $Env:Temp -ChildPath 'VBoxWindowsAdditions'
-        $ServicePath = Join-Path -Path $DestinationPath -ChildPath 'amd64/Bin/VBoxService.exe'
-        $GetterBlock = [ScriptBlock]::Create("$($ServicePath) --version")
-        Invoke-Command -ScriptBlock $GetterBlock
+        $Installer = Get-ItemProperty -Path "#{installer}"
+        $Installer.VersionInfo | Select-Object -ExpandProperty FileVersion
         SHELL
         communicate.sudo(cmd, :error_check => false) do |type, data|
-          version = data.to_s[/^(\d+\.\d+.\d+)/, 1]
+          version = data.to_s[VERSION_PATTERN, 1]
         end
         version
       end

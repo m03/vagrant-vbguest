@@ -10,6 +10,8 @@ module VagrantVbguest
     class Base
       include VagrantVbguest::Helpers::VmCompatible
 
+      VERSION_PATTERN = /^(\d+\.\d+.\d+)/
+
       # Tests whether this installer class is applicable to the
       # current environment. Usually, testing for a specific OS.
       # Subclasses must override this method and return `true` if

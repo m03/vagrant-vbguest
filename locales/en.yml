@@ -4,8 +4,8 @@ en:
     skipped_rebuild: "Rebuilding GuestAdditions skipped."
     installing: "Installing Virtualbox Guest Additions %{installer_version} - guest version is %{guest_version}"
     installing_forced: "Forcing installation of Virtualbox Guest Additions %{installer_version} - guest version is %{guest_version}"
-    mounting_iso: "Mounting ISO"
-    unmounting_iso: "Unmounting ISO"
+    mounting_iso: "Mounting Virtualbox Guest Additions ISO."
+    unmounting_iso: "Unmounting Virtualbox Guest Additions ISO."
     rebuild: "Rebuilding Virtualbox Guest Additions %{guest_version} (Your host version is %{host_version})"
     rebuild_forced: "Forcing rebuilding of Virtualbox Guest Additions %{guest_version} (Your host version is %{host_version})"
     install_error: |-
